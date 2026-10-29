@@ -1,0 +1,4 @@
+services:
+  gps-backfill:
+    build: .
+    ports: ["8080:8080", "8081:8081"] # 8080 API, 8081 actuator (health, prometheus) - keep 8081 internal in real deployments
