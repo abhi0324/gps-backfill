@@ -1,0 +1,16 @@
+server.port: 8080
+management:
+  server.port: 8081
+  endpoints.web.exposure.include: health,prometheus
+logging.structured.format.console: ecs # JSON logs; no request bodies are ever logged
+spring.jackson.deserialization.fail-on-unknown-properties: true
+app:
+  engine.include-no-show: false
+  recompute-interval-ms: 5000
+  provider.latency-ms: 0
+  auth: # DEV TOKENS ONLY - override via env / secret store in real use
+    tokens:
+      - { token: dev-admin-acme, tenant: acme, role: ADMIN, subject: admin-1 }
+      - { token: dev-operator-acme, tenant: acme, role: OPERATOR, subject: op-1 }
+      - { token: dev-employee-acme, tenant: acme, role: EMPLOYEE, subject: emp-1 }
+      - { token: dev-admin-globex, tenant: globex, role: ADMIN, subject: admin-2 }
