@@ -13,9 +13,15 @@ prompt() {
     read -r
 }
 
+command -v jq >/dev/null || { echo "jq is required (brew install jq)"; exit 1; }
+
 BASE_URL="http://localhost:8080/api/v1"
 AUTH_OP="Authorization: Bearer dev-operator-acme"
 AUTH_ADMIN="Authorization: Bearer dev-admin-acme"
+
+# State is in memory: a second run would find demo-trip already invoiced (and cached routes would hide the outage).
+code=$(curl -s -o /dev/null -w "%{http_code}" "$BASE_URL/trips/demo-trip" -H "$AUTH_OP" || true)
+if [ "$code" = "200" ]; then echo "State from a previous run found. Restart the app (state is in-memory), then re-run."; exit 1; fi
 
 clear
 echo -e "${GREEN}================================================================${NC}"
@@ -52,12 +58,12 @@ prompt "STEP 3: Freeze Invoice (Close Invoice as Admin)"
 curl -s -X POST "$BASE_URL/trips/demo-trip/close-invoice" \
   -H "$AUTH_ADMIN" | jq .
 
-prompt "STEP 4: Corrupt Teleport Fix (Impossible Speed Drop Protection)"
+prompt "STEP 4: Bad GPS fix ~17 km away within 5 min (implied ~200 km/h) is dropped; invoice untouched"
 curl -s -X POST "$BASE_URL/trips/demo-trip/pings" \
   -H "$AUTH_OP" \
   -H "Content-Type: application/json" \
   -d '[
-    {"lat": 12.9180, "lon": 77.6200, "ts": 1700000000000, "accuracyM": 5.0}
+    {"lat": 13.0500, "lon": 77.6000, "ts": 1700000300000, "accuracyM": 5.0}
   ]' | jq '{tripId, stats: {teleports: .stats.teleports, pingsIn: .stats.pingsIn}, billing}'
 
 prompt "STEP 5: Real Detour Late Ping (Generates Signed Audit Delta)"
@@ -85,6 +91,9 @@ curl -s -X PUT "$BASE_URL/trips/outage-trip" \
     "stops": [],
     "endTs": 1700000600000
   }' | jq '{tripId, status, totalKm, byRule}'
+
+echo -e "\n${CYAN}On-call view (retries/failures recorded, trip queued):${NC}"
+curl -s http://localhost:8081/actuator/prometheus | grep -E '^gps_(provider_failures|provider_retries|degraded_queue_depth|provider_circuit_state)' || true
 
 echo -e "\n${CYAN}Turning Provider Back ON...${NC}"
 curl -s -X POST "$BASE_URL/admin/provider-outage?on=false" -H "$AUTH_ADMIN" | jq .

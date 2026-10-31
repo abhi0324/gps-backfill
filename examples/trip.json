@@ -1,0 +1,19 @@
+{
+  "pings": [
+    {"lat": 12.9000, "lon": 77.6, "ts": 1700000000000, "accuracyM": 5},
+    {"lat": 12.9001, "lon": 77.6, "ts": 1700000010000, "accuracyM": 5},
+    {"lat": 12.9002, "lon": 77.6, "ts": 1700000020000, "accuracyM": 5},
+    {"lat": 13.9000, "lon": 77.6, "ts": 1700001325000, "accuracyM": 8},
+    {"lat": 12.9590, "lon": 77.6, "ts": 1700001320000, "accuracyM": 5},
+    {"lat": 12.9591, "lon": 77.6, "ts": 1700001330000, "accuracyM": 5}
+  ],
+  "stops": [
+    {"employeeId": "e1", "kind": "DROP", "rider": "PLANNED",
+     "actual": {"lat": 12.92, "lon": 77.6}, "actualTs": 1700000400000},
+    {"employeeId": "e2", "kind": "DROP", "rider": "ADHOC",
+     "home": {"lat": 12.94, "lon": 77.6}, "signInTs": 1700000900000}
+  ],
+  "plannedOffice": {"lat": 12.9592, "lon": 77.6},
+  "actualEnd": {"lat": 12.9592, "lon": 77.6},
+  "endTs": 1700001340000
+}

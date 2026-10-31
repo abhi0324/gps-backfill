@@ -4,6 +4,7 @@ management:
   endpoints.web.exposure.include: health,prometheus
 logging.structured.format.console: ecs # JSON logs; no request bodies are ever logged
 spring.jackson.deserialization.fail-on-unknown-properties: true
+spring.main.log-startup-info: false # startup banner prints OS username/paths; keep logs free of environment details
 app:
   engine.include-no-show: false
   recompute-interval-ms: 5000

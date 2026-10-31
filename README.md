@@ -3,7 +3,10 @@
 Rebuilds a per-trip billable distance from noisy GPS pings, explains every kilometre with a rule label,
 keeps routing-API spend low, survives provider outages, and never silently changes a closed invoice.
 
-> **Interactive Demo Script:** `./demo.sh` (walks through every core flow & failure scenario interactively)
+> **Interactive Demo Script:** `./demo.sh` walks through every core flow and the failure scenario.
+> Prerequisites: app running, `jq` installed. State is in memory, so **restart the app before each run** (the script refuses to run on stale state).
+>
+> **Demo video:** [Watch the demo](https://drive.google.com/file/d/1cFnA4HEyWOwe9Y-fPKropzSSx5DORX9K/view?usp=sharing) &nbsp;|&nbsp; Design note: see *Failure modes*, *Trade-offs* and *Diagrams* below.
 
 ```bash
 docker compose up --build # API :8080, actuator (health/prometheus) :8081
@@ -23,14 +26,14 @@ java -Xmx256m -cp target/classes com.moveinsync.gps.bench.Benchmark 10000 4
 | **5. Trade-offs** | Availability over consistency for `DEGRADED`; determinism over pinpoint accuracy; rejected segments = 0 m. |
 | **6. Monitoring (3 AM)** | Prometheus metrics on `:8081`: circuit state, queue depth, cache hits/misses, rule rejections, ping drops, ECS JSON logging. |
 | **7. Caching & Staleness** | Snapped cell centres (4 decimals ~11 m), 500k entry LRU cache, 24 h TTL. Staleness strictly bounded to road changes within 24 h. |
-| **8. Error Handling & Zero PII** | Fixed non-leaking error responses with UUID `errorId`; coordinates and stop IDs redacted in `toString()` (`Loc[redacted]`). |
+| **8. Error Handling & No PII** | Fixed non-leaking error responses with UUID `errorId`; no coordinates in API segments; coordinates and stop IDs redacted in `toString()` (`Loc[redacted]`); startup log info disabled; parser errors never echoed. |
 
 ## Assumptions
 1. **Speed Limit**: Default $120\text{ km/h}$; speeds exceeding this are physically implausible for urban commute cabs and represent GPS multi-path errors or hardware glitches.
 2. **Null Island & Accuracy**: Coordinates at $(0, 0)$ or horizontal accuracy $> 100\text{ m}$ represent hardware search states and are safely discarded.
 3. **Office Proximity**: Cabs finishing within $400\text{ m}$ of the planned office campus are assumed to have reached the campus (e.g. drop gates or parking bays).
-4. **No-Shows**: Excluded from billable distance by default (can be enabled via `app.engine.include-no-show: true`).
-5. **Zero-Distance Rejections**: Segments failing speed or distance checks contribute $0\text{ m}$ and are explicitly labeled for audit, ensuring vendors are never paid for phantom distance.
+4. **No-Shows**: A no-show's location is added as an anchor only when `app.engine.include-no-show: true` (default off). Distance from the cab's pings is unaffected either way.
+5. **Zero-Distance Rejections**: Segments failing speed or distance checks contribute $0\text{ m}$ and are explicitly labeled for audit, so physically impossible distance is never billed.
 6. **Spatial Grid Snapping**: Snapping to 4 decimals (~$11\text{ m}$) provides optimal cache reuse without introducing material distance discrepancies ($\le 8\text{ m}$ per endpoint).
 
 ## Layout
@@ -62,19 +65,20 @@ Anchors: employee actual -> (ad-hoc) profile home + sign-in time / (planned) pla
 * After `close-invoice`, late pings are merged (as a set, so replays are harmless), the trip is recomputed, and the difference is stored as a **signed delta** (`+1.800 km`) in `/adjustments`. `billedMeters` never changes. Replaying the same late pings yields no new delta. DEGRADED trips cannot be invoiced and never produce deltas.
 
 ## Benchmark (measured, not estimated)
-Machine: **1 vCPU** Intel Xeon @ 2.8 GHz, 4 GB RAM, Linux, OpenJDK 21, `-Xmx256m`. Synthetic trips: ~1,240 pings after a 22-min GPS hole (1,500 generated), 5% duplicates, shuffled, ~1% 9 km bad fixes, 2 employee drops in the hole, 200 commute corridors.
+Synthetic trips: ~1,240 pings after a 22-min GPS hole (1,500 generated), 5% duplicates, shuffled, ~1% 9 km bad fixes, 2 employee drops in the hole, 200 commute corridors. JDK 21, `-Xmx256m`. Wall time includes generating the trips; latency is the engine only (no HTTP, no real provider).
 
-| Metric | Result |
-|---|---|
-| Trips / pings | 10,000 / 12.4 M |
-| Wall time (includes generating the trips) | **6.99 s** -> 1,430 trips/s, 1.77 M pings/s |
-| Engine latency per trip | **p50 0.41 ms, p99 1.45 ms** (max 13.7 ms) |
-| Peak heap (sum of pool peaks, upper bound) | ~21 MB, ran inside a 256 MB heap |
-| Provider calls **before** caching (1 per real gap) | **30,000** |
-| Provider calls **after** cache + de-dupe + batching | **751 legs in 345 HTTP requests** (-97.5% legs, -98.9% requests) |
-| Degraded trips | 0 |
+| Metric | Linux VM, 1 vCPU Xeon 2.8 GHz (1 thread) | Apple Mac, 10 cores, macOS (4 threads) |
+|---|---|---|
+| Trips / pings | 10,000 / 12.4 M | 10,000 / 12.4 M |
+| Wall time | 6.99 s | **0.79 s** |
+| Throughput | 1,430 trips/s, 1.77 M pings/s | **12,614 trips/s, 15.64 M pings/s** |
+| Per-trip latency | p50 0.41 ms, p99 1.45 ms | **p50 0.20 ms, p99 1.45 ms** (max 3.82 ms) |
+| Peak heap (sum of pool peaks, upper bound) | ~21 MB | ~155 MB |
+| Provider calls **before** caching (1 per real gap) | **30,000** | **30,000** |
+| Provider calls **after** cache + de-dupe + batching | **751 legs in 345 HTTP requests** (-97.5% / -98.9%) | same |
+| Degraded trips | 0 | 0 |
 
-Caveat: the 97.5% reduction depends on the synthetic corridors repeating (real commutes do, but measure on production data). Only one core was available, so multi-thread scaling is **not** demonstrated here; the code is thread-safe (concurrency test) but run it on your machine for that number.
+Caveats: the 97.5% reduction depends on trips repeating the same corridors (real commutes do, but measure on production data). The two machines differ in CPU as well as thread count, so the speedup is not a pure thread-scaling figure.
 
 ## Complexity & where it stops scaling
 * Per trip: cleaning O(n log n) (near-sorted input is ~O(n) with TimSort), engine O(n), space O(n). Gateway: O(g) for g real gaps.
@@ -89,7 +93,7 @@ Caveat: the 97.5% reduction depends on the synthetic corridors repeating (real c
 | Concurrent updates of one trip | none | per-trip lock; converges to the single-thread answer (tested) |
 | Bad GPS fixes / impossible speeds | segment labelled `REJECTED_*` | 0 m, flagged for review |
 | Unhandled bug | `500` + `errorId` only | log has `errorId` + exception class, never message/payload |
-| Process crash | in-memory state lost | **not handled** (see below) |
+| Process crash | in-memory state lost | **not handled** (see Trade-offs: persistence left out) |
 
 ## Trade-offs (deliberate)
 * **Availability over consistency for DEGRADED:** a trip is answered immediately from aerial x 1.4 and corrected later, instead of blocking on the provider. Safe because DEGRADED trips cannot be invoiced.
@@ -101,7 +105,7 @@ Caveat: the 97.5% reduction depends on the synthetic corridors repeating (real c
 ## API (dev tokens in `application.yml`)
 ```bash
 H='Authorization: Bearer dev-operator-acme'
-curl -X PUT localhost:8080/api/v1/trips/t1 -H "$H" -H 'Content-Type: application/json' -d @trip.json
+curl -X PUT localhost:8080/api/v1/trips/t1 -H "$H" -H 'Content-Type: application/json' -d @examples/trip.json
 curl localhost:8080/api/v1/trips/t1?detail=full -H "$H"
 curl -X POST localhost:8080/api/v1/trips/t1/pings -H "$H" -H 'Content-Type: application/json' -d '[{"lat":12.9,"lon":77.6,"ts":1700000000000,"accuracyM":5}]'
 curl -X POST localhost:8080/api/v1/trips/t1/close-invoice -H 'Authorization: Bearer dev-admin-acme'
@@ -148,5 +152,14 @@ sequenceDiagram
 ```
 
 ## Test status
-* **23 / 23 tests passing**: Includes all 19 core tests (hard rules, determinism, cache TTL, provider failure & recovery, late-ping deltas, 8-thread concurrency, tenant isolation, PII redaction) and 4 Spring Boot web security tests (`ApiSecurityTest`: token auth, RBAC permissions, multi-tenant isolation, payload validation).
-* **Deterministic & reproducible**: Validated across clean runs and benchmarks under OpenJDK 21.
+* `mvn test` on macOS, JDK 21: **23 / 23 pass**: 19 core tests (every hard rule, determinism, cache TTL, provider failure & recovery, late-ping deltas, 8-thread concurrency, tenant isolation, PII redaction) and 4 web tests (`ApiSecurityTest`: token auth, RBAC, tenant isolation, malformed-body handling).
+* Determinism is asserted directly (cold vs warm cache, shuffled input), not just observed.
+* `./demo.sh` exercises the live flows, including a provider outage and automatic recovery.
+
+## Known limitations
+* If the **first** ping is a bad fix, later good pings can be dropped as teleports (the filter compares with the last *accepted* fix).
+* A wrong but plausible fallback anchor (e.g. a wrong planned location) is not caught by the speed rules.
+* Retries have no backoff, and the simulated provider has no timeout; a real client needs both.
+* The circuit opens after 3 consecutive failures, so a trip with a single real gap (1 try + 1 retry) degrades without opening it.
+* State is in memory: a restart loses trips, invoices and deltas. Static dev tokens are not production auth.
+* The cache is one synchronized LRU map (contention at very high concurrency) and per-trip lock entries are never evicted.
